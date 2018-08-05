@@ -24,17 +24,29 @@ class MockComponentModule extends RawModule {
 
 function getSourceStringForTemplates(templates) {
 	return `module.exports=function() { // TODO: this is fucking ugly
-	const T = ${JSON.stringify(templates, null, 2)}
-	function TL(t) {
-		const k = '_' + t.join('_')
-		return T[k] || (T[k] = Object.freeze(transform(t)))
-	}
-	function transform(template) {
-		throw new Error('This template was not parsed yet', template)
-	}
 	return {
 		get(template) {
-			return TL(template)
+
+			// decode updates
+			const info = template.reduce(({chunks, updates}, c) => {
+				const parts = c.split('🔪🦄')
+				chunks.push(parts[parts.length - 1])
+				if(parts.length > 1) {
+					const updateParts = parts[0].split(',')
+					updateParts[0] = Number.parseInt(updateParts[0], 10)
+					updates.push(updateParts.length === 1 ?
+						updateParts[0]:
+						updateParts
+					)
+				}
+				return {chunks, updates}
+			}, {chunks: [], updates: []})
+
+			console.log('i', info)
+
+			if(info.chunks.length - 1 !== info.updates.length) throw new Error('template was not pre-processed, you might have forgotten to mark it with /*c*/')
+
+			return info
 		}
 	}
 }`
@@ -75,7 +87,8 @@ class ViperHTMLPlugin {
 	constructor(options = {}) {
 		this.options = Object.assign({
 			compilerHintMark: 'c',
-			mockComponent: true
+			mockComponent: true,
+			intentAttributes: []
 		}, options)
 		this.templates = {}
 		if(this.options.compilerHintMark === undefined || this.options.compilerHintMark === null) {
@@ -88,70 +101,31 @@ class ViperHTMLPlugin {
 		compiler.hooks.compilation.tap(PN, (compilation, {normalModuleFactory}) => {
 			new ViperHTMLTemplatesModuleFactory(this.templates, this.options.mockComponent).apply(normalModuleFactory)
 
-			const handler = (parser) => {
-				parser.hooks.program.tap(PN, (ast, comments) => {
-
-
-					for(let i = 0; i < comments.length; i++) {
-						const {value, start, end, loc} = comments[i]
-						const commentText = value.trim()
-
-						if(commentText !== this.options.compilerHintMark) continue
-						// found comment equals to compilerHintMark
-
-						const taggedTemplateExpression = walk.findNodeAround(ast, start, 'TaggedTemplateExpression')
-
-						if(!taggedTemplateExpression) continue
-
-						// comment is between a tag function and a template literal
-						const {tag, quasi} = taggedTemplateExpression.node
-
-						// check if comment is between the tag and quasi
-						if(start < tag.end || quasi.start < end) {
-							console.warn('special comment has been found but it is not between a tag function and a template literal')
-							// TODO: print more descriptive warning: e.g. filename, row and column number, highlighted snippet, whatnot
-							continue
+			normalModuleFactory.hooks.afterResolve
+				.tapAsync(PN, (data, callback) => {
+				const targetTypes = [
+					'javascript/auto',
+					'javascript/dynamic',
+					'javascript/esm'
+				]
+				if(targetTypes.includes(data.type)) {
+					data.loaders.push({
+						loader: __dirname + '/node_modules/babel-loader', // resolve loader relative the plugin
+						options: {
+							plugins: [
+								[
+									__dirname + '/babel-plugin.js',
+									{
+										compilerHintMark: this.options.compilerHintMark,
+										intentAttributes: this.options.intentAttributes
+									}
+								]
+							]
 						}
-
-						const strings = []
-						const raws = []
-
-						// Flag variable to check if contents of strings and raw are equal
-						let isStringsRawEqual = true
-
-						for (const elem of (quasi.quasis)) {
-							const { raw, cooked } = elem.value
-							const value =
-								cooked == null
-									? path.scope.buildUndefinedNode()
-									: {type: 'StringLiteral', value: cooked}
-
-							strings.push(value)
-							raws.push({type: 'StringLiteral', value: cooked})
-
-							if (raw !== cooked) {
-							// false even if one of raw and cooked are not equal
-								isStringsRawEqual = false
-							}
-						}
-
-						// TODO: investigate how to deal with raw and cooked literals; right now only handles the cooked ones
-						const chunks = strings.map(({value}) => value)
-
-						this.templates['_' + chunks.join('_')] = templateInfo.get(chunks)
-					}
-				})
-			}
-
-			normalModuleFactory.hooks.parser
-				.for('javascript/auto')
-				.tap(PN, handler)
-			normalModuleFactory.hooks.parser
-				.for('javascript/dynamic')
-				.tap(PN, handler)
-			normalModuleFactory.hooks.parser
-				.for('javascript/esm')
-				.tap(PN, handler)
+					})
+				}
+				callback(null, data)
+			})
 		})
 	}
 }
