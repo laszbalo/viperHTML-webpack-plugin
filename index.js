@@ -1,3 +1,5 @@
+const fs = require('fs')
+const path = require('path')
 const walk = require('acorn/dist/walk')
 const templateInfo = require('viperhtml/template-info')('foo')
 
@@ -94,6 +96,11 @@ class ViperHTMLPlugin {
 		if(this.options.compilerHintMark === undefined || this.options.compilerHintMark === null) {
 			console.warn('You have not passed in a compiler hint mark, the default \'c\' will be used, e.g.: tag/*c*/`some template literal ${\'an interpolation\'}`')
 		}
+
+		this._babelLoaderPath = fs.readdirSync(path.resolve('node_modules')).includes('babel-loader')
+			? 'babel-loader'
+			: __dirname + '/node_modules/babel-loader'
+
 	}
 	apply(compiler) {
 
@@ -110,7 +117,7 @@ class ViperHTMLPlugin {
 				]
 				if(targetTypes.includes(data.type)) {
 					data.loaders.push({
-						loader: __dirname + '/node_modules/babel-loader', // resolve loader relative the plugin
+						loader: this._babelLoaderPath,
 						options: {
 							plugins: [
 								[
